@@ -1,0 +1,9 @@
+# FFmpeg WASM 核心文件（体积过大，需手动下载）
+*.wasm
+
+# macOS
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/

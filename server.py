@@ -2,12 +2,23 @@
 import http.server
 import socketserver
 import os
+import socket
 
 # 设置端口
 PORT = 8000
 
 # 切换到当前目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -23,14 +34,15 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 if __name__ == "__main__":
+    local_ip = get_local_ip()
     with socketserver.TCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
         print(f"服务器运行在: http://localhost:{PORT}")
         print(f"本地访问: http://localhost:{PORT}/simple.html")
-        print(f"局域网访问: http://10.10.100.80:{PORT}/simple.html")
+        print(f"局域网访问: http://{local_ip}:{PORT}/simple.html")
         print()
         print("其他设备访问步骤:")
         print("1. 确保设备在同一局域网")
-        print("2. 打开浏览器访问: http://10.10.100.80:8000/simple.html")
+        print(f"2. 打开浏览器访问: http://{local_ip}:{PORT}/simple.html")
         print("3. 如无法访问，请检查防火墙设置")
         print()
         print("按 Ctrl+C 停止服务器")
