@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U8 转 MP4 工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        video {
+            width: 100%;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>M3U8 转 MP4 工具</h1>
+
+        <input type="url" id="m3u8Url" value="http://10.10.103.67:5173/10000/m3u8/index.m3u8" placeholder="输入M3U8地址">
+
+        <div>
+            <button onclick="playVideo()">播放视频</button>
+            <button onclick="downloadMP4()">下载MP4格式</button>
+        </div>
+
+        <div style="margin-top: 10px; font-size: 12px; color: #666;">
+            提示：使用FFmpeg.wasm进行MP4转换，首次加载可能需要1-2分钟。
+        </div>
+
+        <video id="video" controls style="display:none;"></video>
+
+        <div id="status"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="./ffmpeg.js"></script>
+    <script>
+        function showStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        function playVideo() {
+            const url = document.getElementById('m3u8Url').value;
+            const video = document.getElementById('video');
+
+            if (!url) {
+                showStatus('请输入M3U8地址');
+                return;
+            }
+
+            if (Hls.isSupported()) {
+                const hls = new Hls();
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                video.style.display = 'block';
+                showStatus('视频加载中...');
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.style.display = 'block';
+                showStatus('视频加载中...');
+            }
+        }
+
+
+        let ffmpeg = null;
+        let ffmpegLoaded = false;
+
+        async function initFFmpeg() {
+            if (ffmpegLoaded) return true;
+
+            try {
+                showStatus('检查FFmpeg库...');
+                console.log('FFmpegWASM available:', typeof FFmpegWASM);
+
+                if (typeof FFmpegWASM === 'undefined') {
+                    throw new Error('FFmpeg库未加载，请刷新页面重试');
+                }
+
+                showStatus('创建FFmpeg实例...');
+                ffmpeg = new FFmpegWASM.FFmpeg();
+
+                ffmpeg.on('log', ({ message }) => {
+                    console.log('FFmpeg log:', message);
+                });
+
+                ffmpeg.on('progress', ({ progress }) => {
+                    const percentage = Math.round(progress * 100);
+                    showStatus(`转换进度: ${percentage}%`);
+                    console.log('FFmpeg progress:', percentage + '%');
+                });
+
+                showStatus('加载FFmpeg核心文件（30MB，请耐心等待1-2分钟）...');
+                console.log('Loading FFmpeg with local files...');
+
+                // 添加进度提示
+                let progressInterval = setInterval(() => {
+                    showStatus('正在加载FFmpeg WASM文件，请耐心等待...');
+                }, 5000);
+
+                // 设置超时
+                const loadPromise = ffmpeg.load({
+                    coreURL: './ffmpeg-core-0.12.9.js',
+                    wasmURL: './ffmpeg-core-0.12.9.wasm'
+                });
+
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('FFmpeg加载超时')), 120000); // 增加到2分钟
+                });
+
+                await Promise.race([loadPromise, timeoutPromise]);
+
+                clearInterval(progressInterval);
+                ffmpegLoaded = true;
+                showStatus('FFmpeg初始化完成！');
+                console.log('FFmpeg loaded successfully');
+                return true;
+            } catch (error) {
+                clearInterval(progressInterval);
+                console.error('FFmpeg初始化错误:', error);
+                showStatus('FFmpeg初始化失败: ' + error.message + '，请尝试刷新页面');
+                return false;
+            }
+        }
+
+        async function downloadMP4() {
+            const url = document.getElementById('m3u8Url').value;
+            if (!url) {
+                showStatus('请输入M3U8地址');
+                return;
+            }
+
+            try {
+                showStatus('开始分析M3U8...');
+
+                // 获取M3U8播放列表
+                const response = await fetch(url);
+                const m3u8Content = await response.text();
+
+                // 解析M3U8文件
+                const lines = m3u8Content.split('\n');
+                const segments = [];
+                const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
+
+                for (let line of lines) {
+                    line = line.trim();
+                    if (line && !line.startsWith('#')) {
+                        const segmentUrl = line.startsWith('http') ? line : baseUrl + line;
+                        segments.push(segmentUrl);
+                    }
+                }
+
+                if (segments.length === 0) {
+                    showStatus('未找到视频片段');
+                    return;
+                }
+
+                showStatus(`找到 ${segments.length} 个视频片段，开始下载...`);
+
+                // 下载所有片段
+                const segmentBlobs = [];
+                for (let i = 0; i < segments.length; i++) {
+                    showStatus(`下载片段 ${i + 1}/${segments.length}...`);
+                    try {
+                        const segResponse = await fetch(segments[i]);
+                        if (!segResponse.ok) {
+                            throw new Error(`片段 ${i + 1} 下载失败`);
+                        }
+                        const segmentBlob = await segResponse.blob();
+                        segmentBlobs.push(segmentBlob);
+                    } catch (error) {
+                        console.error(`片段 ${i + 1} 下载失败:`, error);
+                    }
+                }
+
+                if (segmentBlobs.length === 0) {
+                    showStatus('没有成功下载任何片段');
+                    return;
+                }
+
+                showStatus('合并视频片段...');
+
+                // 合并TS片段
+                const segmentBuffers = [];
+                for (const blob of segmentBlobs) {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    segmentBuffers.push(new Uint8Array(arrayBuffer));
+                }
+
+                const totalLength = segmentBuffers.reduce((sum, buffer) => sum + buffer.length, 0);
+                const mergedBuffer = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const buffer of segmentBuffers) {
+                    mergedBuffer.set(buffer, offset);
+                    offset += buffer.length;
+                }
+
+                // 初始化FFmpeg
+                if (!await initFFmpeg()) {
+                    return;
+                }
+
+                showStatus('正在转换为MP4格式...');
+
+                // 写入TS文件到FFmpeg
+                await ffmpeg.writeFile('input.ts', mergedBuffer);
+
+                // 执行转换命令
+                await ffmpeg.exec([
+                    '-i', 'input.ts',
+                    '-c', 'copy', // 复制流，不重新编码
+                    '-movflags', 'faststart', // 优化MP4
+                    'output.mp4'
+                ]);
+
+                // 读取转换后的文件
+                const mp4Data = await ffmpeg.readFile('output.mp4');
+
+                // 创建下载链接
+                const mp4Blob = new Blob([mp4Data.buffer], { type: 'video/mp4' });
+                const downloadUrl = URL.createObjectURL(mp4Blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'video.mp4';
+                a.click();
+                URL.revokeObjectURL(downloadUrl);
+
+                // 清理临时文件
+                try {
+                    await ffmpeg.deleteFile('input.ts');
+                    await ffmpeg.deleteFile('output.mp4');
+                } catch (e) {
+                    // 忽略清理错误
+                }
+
+                showStatus(`MP4下载完成！已合并 ${segmentBlobs.length} 个片段`);
+
+            } catch (error) {
+                showStatus('转换失败: ' + error.message);
+                console.error('转换错误:', error);
+            }
+        }
+    </script>
+</body>
+</html>
